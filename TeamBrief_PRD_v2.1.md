@@ -1,9 +1,9 @@
 # TeamBrief — Product Requirements Document
 
-**Version 2.0 — Revised | March 2026 | Hackathon MVP**
+**Version 2.1 — Aligned with Orchestrator/Playbook | March 2026 | Hackathon MVP**
 
 **Status:** Ready for Development
-**Stack:** Next.js, Supabase, Prisma, Vercel, OpenAI
+**Stack:** Next.js, Supabase (Postgres only via Prisma), Vercel, OpenAI
 
 ---
 
@@ -11,7 +11,7 @@
 
 TeamBrief converts a single messy daily update (free-form text) into a structured standup organized as Done / Next / Blockers. It generates a project-level daily view, provides an intelligent Blocker Board that highlights Recurring, Aging, and Blast Radius blockers with category tags, and exports the standup as Markdown for Slack or Notion.
 
-**Authentication:** None required for MVP. Users enter a Name and select or create a Project. A locally-generated `deviceId` (UUID) is stored in localStorage and sent with every submission to enable conflict detection and future auth migration.
+**Authentication:** None required for MVP. Users enter a Name and select or create a Project. A locally-generated `deviceId` (UUID) is stored in localStorage and sent with every submission to enable future auth migration. deviceId conflict detection UI is deferred (see Section 15.1).
 
 ---
 
@@ -48,10 +48,11 @@ Mixed project teams (Engineering / Product / Design) doing daily standups. Proje
 2. User enters Name (stored locally alongside `deviceId`).
 3. User writes one free-form message update.
 4. Client-side input gate validates minimum quality (see Section 12).
-5. System runs AI-1 extraction → server runs quality checks → AI-3 fires if flagged → shows Done / Next / Blockers in a confirmation screen.
-6. Flagged items display inline with `reviewReason` and rewrite suggestions (hard fails block submit; soft fails are dismissible).
-7. User edits / accepts → Submit.
-8. App updates: Today Standup view is immediate; Blocker Board updates asynchronously.
+5. System runs AI-1 extraction → server runs quality checks → shows Done / Next / Blockers in a confirmation screen.
+6. Flagged items display inline with `reviewReason`. Hard fails block submit (user must edit to clear). Soft fails are dismissible.
+7. If AI-3 is available (Phase 2 enhancement): hard-fail items also show 2–3 rewrite suggestions. If AI-3 is not yet wired: user edits manually.
+8. User edits / accepts → Submit.
+9. App updates: Today Standup view is immediate; Blocker Board updates asynchronously via `POST /api/pipeline/run` with body `{ updateId }`.
 
 ### Flow B — View Standup
 
@@ -59,7 +60,7 @@ User opens the Today view and sees a team-level Done / Next / Blockers summary a
 
 ### Flow C — Export
 
-User clicks Export Markdown, selects format (Slack or Notion) and view (Team Summary or By Person), then copies via a one-click copy button.
+User clicks Export Markdown, selects format (Slack or Notion), then copies the Team Summary via a one-click copy button. **Deferred:** By Person view toggle (same data, grouped by member).
 
 ---
 
@@ -95,7 +96,7 @@ User clicks Export Markdown, selects format (Slack or Notion) and view (Team Sum
 - **Aging:** open duration per cluster (days since `firstSeenAt`).
 - **Blast Radius:** count of unique members affected per cluster.
 - **Status:** Open / Resolved with manual toggle.
-- **Resurfaced badge:** shown on cluster cards when `resurfacedCount > 0` and `lastResurfacedAt` is within the board range (e.g., last 7 days). Tooltip shows resolution and resurfacing history.
+- **Resurfaced badge:** shown on cluster cards when `resurfacedCount > 0` and `lastResurfacedAt` is within the board range (e.g., last 7 days). **Deferred:** Tooltip showing resolution and resurfacing history.
 - May show a brief "Updating clusters…" spinner while async processing completes.
 
 ### 6.6 Markdown Export
@@ -103,8 +104,8 @@ User clicks Export Markdown, selects format (Slack or Notion) and view (Team Sum
 - Standard Markdown core with two lightweight formatting wrappers:
   - **Notion:** real Markdown headings and bullets (`## Done`, `- item`).
   - **Slack:** bold labels and bullets (`*Done*` then `• item`).
-- View toggle inside export modal: **Team Summary** (default) or **By Person** (same data, grouped).
-- Compact Blocker Highlights footer: top 3 recurring/aging clusters with category, age, and blast radius.
+- **MVP:** Team Summary view only. **Deferred:** By Person view toggle (same data, grouped by member).
+- Compact Blocker Highlights footer (Phase 2 enhancement): top 3 recurring/aging clusters with category, age, and blast radius.
 - One-click copy-to-clipboard button.
 
 ---
@@ -126,17 +127,19 @@ All AI tasks use **gpt-4o-mini** for speed and cost efficiency. Structured Outpu
 - **Trigger:** After extraction, for each blocker (batched per update). Runs asynchronously post-submit.
 - **Output:** One category from the fixed set: Access / Decision / Dependency / Technical / External / Capacity.
 
-### 7.3 AI-3: Quality Rewrite Suggestions (Conditional)
+### 7.3 AI-3: Quality Rewrite Suggestions (Phase 2 Enhancement)
 
 - **Trigger:** Only when server-side quality checks flag an item as a hard fail (see Section 9).
 - **Output:** 2–3 rewrite suggestions per flagged item; user must choose or edit to clear the flag.
-- **Soft fails:** Suggestions are shown but submission is not blocked.
+- **Scope:** Hard-fail items only. Soft-fail items do not trigger AI-3 — they show a warning but the user can dismiss and submit without rewriting.
+- **Phase 1 behavior:** AI-3 is not wired. Hard-fail items require manual editing to clear. This is sufficient for the E2E demo.
+- **Phase 2 behavior:** AI-3 is wired in. Hard-fail items show rewrite suggestions alongside manual editing.
 
 ### 7.4 Embeddings: Blocker Clustering
 
-- **Model:** text-embedding-3-small with reduced dimensions (256) for cost and storage efficiency.
+- **Model:** text-embedding-3-small (default dimensions; dimension reduction is optional and configurable).
 - **Trigger:** For each new blocker, after AI-2 categorization. Runs asynchronously.
-- **Method:** Generate embedding, compare via cosine similarity against existing cluster centroids within the same project and category. Cluster if above threshold.
+- **Method:** Generate embedding, compare via cosine similarity against existing cluster centroids within the same project and category. Cluster if above threshold (initial default: 0.85, tunable via config).
 
 ---
 
@@ -155,8 +158,8 @@ All AI tasks use **gpt-4o-mini** for speed and cost efficiency. Structured Outpu
 | FR-9 | Aging computed as `today − firstSeenAt` in whole days. |
 | FR-10 | Blast radius computed as number of distinct `memberName`s in the cluster. |
 | FR-11 | Cluster status: default Open; user can mark Resolved (stores `resolvedAt`). If a resolved cluster gets a new matching blocker: set `status=Open`, increment `resurfacedCount`, set `lastResurfacedAt=now`, keep `resolvedAt` for history. |
-| FR-12 | Export generates Markdown (Slack/Notion wrappers) with team summary/by-person toggle and Blocker Highlights footer. Supports copy-to-clipboard. |
-| FR-13 | Generate `deviceId` (UUID) on first visit, persist in localStorage, send with every submission. Show non-blocking warning if same `memberName` appears from different `deviceId`s within a project. |
+| FR-12 | Export generates Markdown (Slack/Notion wrappers) with Team Summary view and copy-to-clipboard. By-Person view toggle is deferred. Blocker Highlights footer is a Phase 2 enhancement. |
+| FR-13 | Generate `deviceId` (UUID) on first visit, persist in localStorage, send with every submission. **Deferred:** non-blocking warning if same `memberName` appears from different `deviceId`s within a project. |
 | FR-14 | Input gate rejects submissions with fewer than 8 characters, fewer than 2 words, no letters, or only stopwords. Friendly error message displayed. |
 
 ---
@@ -167,15 +170,16 @@ Quality checks run **server-side on extracted items** (after AI-1), not on raw t
 
 1. AI-1 extracts `{ done[], next[], blockers[] }`
 2. Server runs `qualityCheck()` on each item
-3. If hard-fail flags exist → call AI-3 for suggestions
-4. Return to UI: extracted items + flags + suggestions
-5. User edits/accepts → submit → final server validation (same checks)
+3. Return to UI: extracted items + flags
+4. **Phase 1:** If hard-fail flags exist → user must edit to clear (manual resolution). No AI-3 dependency.
+5. **Phase 2:** If hard-fail flags exist → AI-3 generates 2–3 rewrite suggestions. User may pick a suggestion or edit manually.
+6. User edits/accepts → submit → final server validation (same checks)
 
 ### 9.1 Two-Tier Severity System
 
 #### Hard Fail (Blocking)
 
-Submission is blocked until the user picks an AI-3 suggestion or edits the item to clear the flag.
+Submission is blocked until the user edits the item to clear the flag. (Phase 2 enhancement: user may also pick an AI-3 rewrite suggestion instead of editing manually.)
 
 - **`vague_severe`:** "worked on backend", "fixed bugs", "did stuff", "progress"
 - **`multi_task_severe`:** 3+ actions in one bullet (detected via 2+ conjunctions: and, then, also, plus, &)
@@ -196,9 +200,9 @@ Warnings and suggestions shown, but user can dismiss and submit.
 - Contains 2+ separators: semicolons or commas with multiple verbs.
 - **Severity:** 3+ actions = hard fail; 2 actions = soft fail.
 
-### 9.3 Quality Score
+### 9.3 Quality Score (Deferred)
 
-A per-member `qualityScore` (0–100) is computed as a rolling average over the last N submissions, based on soft/hard fail rates. Stored on each Update record. Not exposed to users in MVP; available for future use (e.g., nudges, selective AI-3 skipping for high-quality contributors).
+A per-member `qualityScore` (0–100) is computed as a rolling average over the last N submissions, based on soft/hard fail rates. Stored on each Update record. Not exposed to users in MVP; available for future use (e.g., nudges, selective AI-3 skipping for high-quality contributors). **Deferred: field exists in data model but computation is not implemented in MVP.**
 
 ---
 
@@ -241,7 +245,7 @@ A per-member `qualityScore` (0–100) is computed as a rolling average over the 
 | `date` | Date | Standup date |
 | `text` | String | Original blocker text |
 | `category` | Enum | Access \| Decision \| Dependency \| Technical \| External \| Capacity |
-| `embedding` | Vector(256) | text-embedding-3-small, reduced dimensions |
+| `embedding` | Vector | text-embedding-3-small, default dimensions (configurable) |
 | `clusterId` | UUID (FK) | References BlockerCluster.id |
 
 ### BlockerCluster
@@ -252,7 +256,7 @@ A per-member `qualityScore` (0–100) is computed as a rolling average over the 
 | `projectId` | UUID (FK) | References Project.id |
 | `category` | Enum | Same enum as BlockerItem |
 | `representativeText` | String | Human-readable cluster label |
-| `centroidEmbedding` | Vector(256) | Average embedding of cluster members |
+| `centroidEmbedding` | Vector | Average embedding of cluster members (dimensions match embedding model default) |
 | `count` | Integer | Number of blocker items in cluster |
 | `firstSeenAt` | Date | Earliest blocker date in cluster |
 | `lastSeenAt` | Date | Most recent blocker date |
@@ -270,7 +274,7 @@ Semantic embedding-based clustering replaces the original Jaccard token-overlap 
 
 ### 11.1 Pipeline
 
-1. Generate a 256-dimension embedding for the new blocker text using text-embedding-3-small.
+1. Generate an embedding for the new blocker text using text-embedding-3-small (default dimensions).
 2. Query existing clusters within the same project and same category.
 3. Compute cosine similarity between the new embedding and each cluster centroid.
 4. If similarity exceeds the threshold: assign to the best-matching cluster, update the centroid (running average), and update cluster metadata.
@@ -280,9 +284,9 @@ Semantic embedding-based clustering replaces the original Jaccard token-overlap 
 ### 11.2 Design Decisions
 
 - Clustering is scoped to **same project + same category** to reduce false positives.
-- Cosine similarity threshold should be tuned during development (recommended starting point: **0.82**).
+- Cosine similarity threshold: initial default **0.85** (tunable via `src/shared/config.ts`; safe range 0.82–0.90). Tune on demo data.
 - Centroid is a running average of all member embeddings in the cluster.
-- This approach runs **asynchronously post-submit** and does not block the user.
+- This approach runs **asynchronously post-submit** via `POST /api/pipeline/run` with body `{ updateId }` and does not block the user.
 
 ---
 
@@ -321,9 +325,11 @@ Reject and show a friendly error if the input has fewer than 8 characters, fewer
 The submission pipeline is split into a **critical path** (user-blocking) and a **background path** (async) to optimize perceived performance.
 
 > **Critical Path (blocks user) — target ≤ 3s p95**
-> AI-1 extraction → server-side quality checks → AI-3 rewrite suggestions (if flagged) → confirmation UI
+> AI-1 extraction → server-side quality checks → confirmation UI
+> (Phase 2 adds: AI-3 rewrite suggestions for hard-fail items on the critical path)
 
 > **Background Path (async, post-submit) — target ≤ 5s best-effort**
+> Triggered by follow-up client call: `POST /api/pipeline/run` with body `{ updateId }`
 > AI-2 blocker categorization → embedding generation → clustering → Blocker Board update
 
 After submit, the user is redirected to the Today Standup view immediately. The Blocker Board may show a brief "Updating clusters…" spinner while background processing completes.
@@ -333,12 +339,13 @@ After submit, the user is redirected to the Today Standup view immediately. The 
 | Component | Technology |
 |-----------|-----------|
 | Framework | Next.js (App Router, fullstack) |
-| Database | Supabase Postgres |
-| ORM | Prisma |
+| Database | Supabase Postgres (accessed exclusively via Prisma) |
+| ORM | Prisma (sole DB access layer) |
 | Hosting | Vercel |
 | AI (extraction, categorization, suggestions) | OpenAI gpt-4o-mini with Structured Outputs |
-| Embeddings | OpenAI text-embedding-3-small (256 dimensions) |
+| Embeddings | OpenAI text-embedding-3-small (default dimensions) |
 | Schema validation | Zod |
+| API pattern | REST routes (`app/api/`) only — no server actions |
 
 ---
 
@@ -369,7 +376,7 @@ Updates are expected to be submitted throughout the day by different members. Th
 
 - A `deviceId` (UUID) is generated on first visit and persisted in localStorage.
 - Sent with every submission and stored on Update records.
-- If the same `memberName` appears from different `deviceId`s within a project, a non-blocking warning is shown: "This name is used on another device. Consider adding an initial (e.g., Ammar S)."
+- **Deferred:** If the same `memberName` appears from different `deviceId`s within a project, a non-blocking warning is shown. This is cut from MVP and deferred to post-hackathon.
 - Enables future migration: `deviceId` → user account mapping.
 
 ### 15.2 Data Retention
@@ -378,7 +385,25 @@ Data is retained indefinitely for the duration of the hackathon demo. A manual "
 
 ---
 
-## 16. Revision Log (v1.0 → v2.0)
+## 16. Revision Log (v1.0 → v2.0 → v2.1)
+
+### v2.0 → v2.1 (Orchestrator/Playbook Alignment)
+
+| Area | Change |
+|------|--------|
+| Stack (S13.2) | Prisma is sole DB access layer; no Supabase client SDK at runtime. REST routes only, no server actions. |
+| AI-3 (S7.3, S5 Flow A, S13.1) | AI-3 rewrite suggestions moved from critical path to Phase 2 enhancement. Phase 1 uses manual editing for hard-fail resolution. |
+| Embeddings (S7.4, S10, S11) | Removed hardcoded 256 dimensions; use text-embedding-3-small default dimensions (configurable). |
+| Clustering threshold (S11.2) | Changed recommended starting point from 0.82 to 0.85; made tunable via config. |
+| Export (S6.6, FR-12, S5 Flow C) | By-Person view toggle deferred. Blocker Highlights footer is Phase 2 enhancement. Team Summary only for MVP. Flow C updated to match. |
+| deviceId (S15.1, FR-13) | Conflict detection/warning UI deferred. deviceId generation and storage retained. |
+| Quality Score (S9.3) | Marked as deferred. Field exists in data model but computation not implemented in MVP. |
+| Blocker Board (S6.5) | Resurfaced badge tooltip with full history deferred. Basic badge retained. |
+| Async pipeline (S13.1, S11.2, S5 Flow A) | Background path triggered by `POST /api/pipeline/run` with body `{ updateId }`; no query params, no external queue. |
+| Quality pipeline (S9) | Made phase-aware: Phase 1 = manual edit for hard-fails, Phase 2 = AI-3 suggestions added. |
+| Hard-fail wording (S9.1) | Removed implication that AI-3 is required for hard-fail resolution. Reworded to manual-first. |
+
+### v1.0 → v2.0
 
 | Area | Change |
 |------|--------|

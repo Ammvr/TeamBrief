@@ -1,0 +1,33 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "agent": {
+        "teambrief-orchestrator": {
+            "mode": "primary",
+            "model": "anthropic/claude-opus-4-6",
+            "prompt": "{file:./opencode/agents/teambrief-orchestrator.md}",
+            "permission": {
+                "task": {
+                    "*": "deny",
+                    "minimax-worker": "allow",
+                    "glm-worker": "allow",
+                    "kimi-worker": "allow"
+                }
+            }
+        },
+        "minimax-worker": {
+            "mode": "subagent",
+            "model": "go/minimax-m2.5",
+            "prompt": "{file:./opencode/agents/minimax-worker.md}"
+        },
+        "glm-worker": {
+            "mode": "subagent",
+            "model": "go/glm-5",
+            "prompt": "{file:./opencode/agents/glm-worker.md}"
+        },
+        "kimi-worker": {
+            "mode": "subagent",
+            "model": "go/kimi-k2.5",
+            "prompt": "{file:./opencode/agents/kimi-worker.md}"
+        }
+    }
+}
